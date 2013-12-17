@@ -1,22 +1,38 @@
 import mpd
 import time
+import argparse
 from random import randint
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--hostname', type=str, default="localhost")
+parser.add_argument("--port", type=int, default=6600)
+parser.add_argument("--blacklist", type=str, action="append")
+parser.add_argument("--logfile", type=str)
+
+args = parser.parse_args()
 
 reconnect = False
 client = mpd.MPDClient()
-client.connect('music.dorsal.polymtl.ca', 6600)
+client.connect(args.hostname, args.port)
 addedSongs = []
 lastPlaylistId = -1
 completeList = []
-previous_last_modified = 0
 
-def filterList(item, blacklist):
+last_modified = {}
+previous_last_modified = {}
+
+if args.blacklist:
+	for blacklist in args.blacklist:
+		previous_last_modified[blacklist] = 0
+
+def filterList(item, blacklists):
 	if("file" in item):
 		path = item["file"]
-		if (path in blacklist):
-			return False
-		else:
-			return True
+		for blacklist in blacklists:
+			if (path in blacklist):
+				return False
+
+		return True
 		'''
 		if (path.find("VIDEO") == -1 and path.find("perusse") == -1) :
 			return True
@@ -32,17 +48,24 @@ def addRandom():
 	global completeList
 	choice = completeList[randint(0,len(completeList)-1)]
 	print(("Adding " + choice["file"]).encode("utf-8"))
-	with open("dj.log", "a") as f:
-		f.write(choice["file"]+"\n")
+	if args.logfile:
+		with open(args.logfile, "a") as f:
+			f.write(choice["file"]+"\n")
 	songid = int(client.addid(choice["file"]))
 	addedSongs.append(songid)
 
 
 def updateList():
 	global completeList
-	blacklist = client.listplaylist("dj-blacklist")
+	blacklists = []
+	if args.blacklist:
+		for blacklist in args.blacklist:
+			try:
+				blacklists.append(client.listplaylist(blacklist))
+			except:
+				pass
 	completeList = client.listall()
-	completeList = [item for item in completeList if filterList(item, blacklist)]
+	completeList = [item for item in completeList if filterList(item, blacklists)]
 
 updateList()
 
@@ -51,7 +74,7 @@ while(True):
 		if(reconnect == True):
 			reconnect = False
 			client = mpd.MPDClient()
-			client.connect("music.dorsal.polymtl.ca", 6600)
+			client.connect(args.hostname, args.port)
 
 		idle = client.idle("database", "stored_playlist", "player", "playlist")
 		print(idle)
@@ -60,13 +83,16 @@ while(True):
 
 		# update if blacklist file modified
 		if "stored_playlist" in idle:
+			must_update = False
 			playlists = client.listplaylists()
 			for playlist in playlists:
-				if playlist["playlist"] == "dj-blacklist":
-					last_modified = time.mktime(time.strptime(playlist["last-modified"], "%Y-%m-%dT%H:%M:%SZ"))
-					if last_modified > previous_last_modified:
-						updateList()
-						previous_last_modified = last_modified
+				if playlist["playlist"] in args.blacklist:
+					last_modified[playlist["playlist"]] = time.mktime(time.strptime(playlist["last-modified"], "%Y-%m-%dT%H:%M:%SZ"))
+					if last_modified[playlist["playlist"]] > previous_last_modified[playlist["playlist"]] :
+						must_update = True
+						previous_last_modified [playlist["playlist"]] = last_modified[playlist["playlist"]] 
+			if must_update:
+				updateList()
 
 		status = client.status()
 		print(status)
